@@ -7,6 +7,8 @@ const multer = require('multer');
 const lowdb = require('lowdb');
 const FileAsync = require('lowdb/adapters/FileAsync');
 const uuidv4 = require('uuid/v4');
+const fs = require('fs');
+const sharp = require('sharp');
 
 const app = express();
 
@@ -39,10 +41,11 @@ const storage = multer.diskStorage({
   destination(req, file, cb) {
     const today = new Date();
     const dd = today.getDate();
-    const mm = today.getMonth() + 1; // January is 0!
+    const mm = today.getMonth() + 1;
     const yyyy = today.getFullYear();
-    const uploadPath = `public/resource/${yyyy}/${mm}/${dd}`;
-    mkdirp(`${uploadPath}`);
+    // const uploadPath = `public/resource/${yyyy}/${mm}/${dd}`;
+    const uploadPath = `public/resource`;
+    // mkdirp(`${uploadPath}`);
     cb(null, `${path.resolve(__dirname, uploadPath)}`);
   },
   filename(req, { originalname, mimetype }, cb) {
@@ -84,6 +87,32 @@ app.post('/upload', uploader.array('images'), async ({ files }, res) => {
   await Promise.all(insertQueue);
 
   res.json({ images });
+});
+
+// Serve image
+app.get('/image/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const imgPath = path.resolve(__dirname, process.env.FOLDER_RESOURCE, id);
+    if (!fs.existsSync(imgPath)) {
+      throw new Error(`Image #${id} is not exist.`);
+    }
+
+    const imageStream = sharp(imgPath);
+    return imageStream.pipe(res);
+  } catch (err) {
+    return next(err);
+  }
+});
+// Error handler
+app.use((err, req, res, next) => {
+  const message =
+    process.env.NODE_ENV !== 'production'
+      ? err.message
+      : 'An error encountered while processing images';
+  res.status(500).json({ message });
+
+  return next();
 });
 
 const port = process.env.PORT || 9999;
