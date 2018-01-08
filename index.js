@@ -4,8 +4,18 @@ const _ = require('lodash');
 const mkdirp = require('mkdirp');
 const path = require('path');
 const multer = require('multer');
+const lowdb = require('lowdb');
+const FileAsync = require('lowdb/adapters/FileAsync');
+const uuidv4 = require('uuid/v4');
 
 const app = express();
+
+const adapter = new FileAsync('db.json');
+const db = (async connection => {
+  const dbConnection = await connection;
+  await dbConnection.defaults({ resource: [], users: [] }).write();
+  return dbConnection;
+})(lowdb(adapter));
 
 // Routes
 const packageJson = require('./package.json');
@@ -48,9 +58,33 @@ const fileFilter = (req, { mimetype }, cb) =>
   cb(null, Boolean(allowTypes.indexOf(mimetype) > -1));
 const uploader = multer({ storage, fileFilter, limits: uploadConfig });
 
-app.post('/upload', uploader.array('images'), (req, res) =>
-  res.json({ images: req.files })
-);
+app.post('/upload', uploader.array('images'), async ({ files }, res) => {
+  const dbInstance = await db;
+
+  const insertQueue = [];
+  const images = [];
+  _.each(files, ({ filename, path: imagePath, size }) => {
+    // Insert image information to db
+    insertQueue.push(
+      dbInstance
+        .get('resource')
+        .push({
+          id: uuidv4(),
+          name: filename,
+          path: imagePath,
+          size
+        })
+        .write()
+    );
+    // Prepare data to return to client
+    images.push({
+      name: filename
+    });
+  });
+  await Promise.all(insertQueue);
+
+  res.json({ images });
+});
 
 const port = process.env.PORT || 9999;
 app.listen(port);
