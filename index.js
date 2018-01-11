@@ -1,7 +1,7 @@
 const express = require('express');
 const _ = require('lodash');
 
-const mkdirp = require('mkdirp');
+// const mkdirp = require('mkdirp');
 const path = require('path');
 const multer = require('multer');
 const lowdb = require('lowdb');
@@ -15,7 +15,10 @@ const app = express();
 const adapter = new FileAsync('db.json');
 const db = (async connection => {
   const dbConnection = await connection;
-  await dbConnection.defaults({ resource: [], users: [] }).write();
+  await dbConnection.defaults({
+    resource: [],
+    users: []
+  }).write();
   return dbConnection;
 })(lowdb(adapter));
 
@@ -39,16 +42,19 @@ const uploadConfig = {
 
 const storage = multer.diskStorage({
   destination(req, file, cb) {
-    const today = new Date();
-    const dd = today.getDate();
-    const mm = today.getMonth() + 1;
-    const yyyy = today.getFullYear();
+    // const today = new Date();
+    // const dd = today.getDate();
+    // const mm = today.getMonth() + 1;
+    // const yyyy = today.getFullYear();
     // const uploadPath = `public/resource/${yyyy}/${mm}/${dd}`;
     const uploadPath = `public/resource`;
     // mkdirp(`${uploadPath}`);
     cb(null, `${path.resolve(__dirname, uploadPath)}`);
   },
-  filename(req, { originalname, mimetype }, cb) {
+  filename(req, {
+    originalname,
+    mimetype
+  }, cb) {
     const nameSegments = originalname.split('.');
     const name = nameSegments[0] || `${Date.now()}`;
 
@@ -57,27 +63,39 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${name}.${ext}`);
   }
 });
-const fileFilter = (req, { mimetype }, cb) =>
+const fileFilter = (req, {
+    mimetype
+  }, cb) =>
   cb(null, Boolean(allowTypes.indexOf(mimetype) > -1));
-const uploader = multer({ storage, fileFilter, limits: uploadConfig });
+const uploader = multer({
+  storage,
+  fileFilter,
+  limits: uploadConfig
+});
 
-app.post('/upload', uploader.array('images'), async ({ files }, res) => {
+app.post('/upload', uploader.array('images'), async({
+  files
+}, res) => {
   const dbInstance = await db;
 
   const insertQueue = [];
   const images = [];
-  _.each(files, ({ filename, path: imagePath, size }) => {
+  _.each(files, ({
+    filename,
+    path: imagePath,
+    size
+  }) => {
     // Insert image information to db
     insertQueue.push(
       dbInstance
-        .get('resource')
-        .push({
-          id: uuidv4(),
-          name: filename,
-          path: imagePath,
-          size
-        })
-        .write()
+      .get('resource')
+      .push({
+        id: uuidv4(),
+        name: filename,
+        path: imagePath,
+        size
+      })
+      .write()
     );
     // Prepare data to return to client
     images.push({
@@ -86,7 +104,9 @@ app.post('/upload', uploader.array('images'), async ({ files }, res) => {
   });
   await Promise.all(insertQueue);
 
-  res.json({ images });
+  res.json({
+    images
+  });
 });
 
 // Serve image
@@ -96,18 +116,22 @@ const allowSizes = {
   md: 0.6,
   lg: 0.8,
   full: 1,
-  '70x70': { width: 70, height: 70 }
+  '70x70': {
+    width: 70,
+    height: 70
+  }
 };
 const DEFAULT_SIZE = 1;
-app.get('/image/:size/:id', async ({ params }, res, next) => {
+app.get('/image/:size/:id', async({
+  params
+}, res, next) => {
   try {
-    const { size, id } = params;
+    const {
+      size,
+      id
+    } = params;
     const imgPath = path.resolve(__dirname, process.env.FOLDER_RESOURCE, id);
-    const imgCachePath = path.resolve(
-      __dirname,
-      'public/cache',
-      `${size}-${id}`
-    );
+    const imgCachePath = path.resolve(__dirname, 'public/cache', `${size}-${id}`);
 
     if (!fs.existsSync(imgPath)) {
       throw new Error(`Image #${id} is not exist.`);
@@ -117,26 +141,46 @@ app.get('/image/:size/:id', async ({ params }, res, next) => {
     if (fs.existsSync(imgCachePath)) {
       return fs.createReadStream(imgCachePath).pipe(res);
     }
-
     const imageStream = sharp(imgPath);
     // Get image data
     const imageData = await imageStream.metadata();
 
     const requestSize = allowSizes[size] ? allowSizes[size] : DEFAULT_SIZE;
+    let imgWidth;
+    let imgHeight;
 
     // Resize with percent
     if (_.isNumber(requestSize)) {
-      imageStream.resize(
-        imageData.width * requestSize,
-        imageData.height * requestSize
-      );
+      imgWidth = imageData.width * requestSize;
+      imgHeight = imageData.height * requestSize;
     }
     // resize with absolute size
     if (_.isObject(requestSize)) {
-      imageStream.resize(requestSize.width, requestSize.height);
+      imgWidth = requestSize.width;
+      imgHeight = requestSize.height;
     }
 
-    // Write cache
+    if (imgWidth && imgHeight) {
+      imageStream.resize(imgWidth, imgHeight);
+    }
+
+    // Embedded watermark
+    const watermark = sharp(
+      path.resolve(__dirname, 'public/static', 'uconn-logo.png')
+    );
+    const watermarkData = await watermark.metadata();
+    if (imgWidth && imgHeight) {
+      watermark
+        .resize(
+          watermarkData.width * imgWidth / imageData.width,
+          watermarkData.height * imgHeight / imageData.height
+        );
+    }
+
+    imageStream.overlayWith(await watermark.toBuffer(), {
+      gravity: 'southwest'
+    });
+
     imageStream
       .clone()
       .toFile(imgCachePath)
@@ -151,10 +195,12 @@ app.get('/image/:size/:id', async ({ params }, res, next) => {
 // Error handler
 app.use((err, req, res, next) => {
   const message =
-    process.env.NODE_ENV !== 'production'
-      ? err.message
-      : 'An error encountered while processing images';
-  res.status(500).json({ message });
+    process.env.NODE_ENV !== 'production' ?
+    err.message :
+    'An error encountered while processing images';
+  res.status(500).json({
+    message
+  });
 
   return next();
 });
