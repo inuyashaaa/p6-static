@@ -9,18 +9,45 @@ const FileAsync = require('lowdb/adapters/FileAsync');
 const uuidv4 = require('uuid/v4');
 const fs = require('fs');
 const sharp = require('sharp');
+const winston = require('winston');
 
 const app = express();
 
 const adapter = new FileAsync('db.json');
 const db = (async connection => {
   const dbConnection = await connection;
-  await dbConnection.defaults({
-    resource: [],
-    users: []
-  }).write();
+  await dbConnection
+    .defaults({
+      resource: [],
+      users: []
+    })
+    .write();
   return dbConnection;
 })(lowdb(adapter));
+
+const { createLogger, format, transports } = winston;
+const logger = createLogger({
+  level: 'info',
+  format: format.json(),
+  transports: [
+    // Ghi log ra 2 file tách biệt
+    // error.log sẽ ghi lại những error trong ứng dụng
+    // combined.log sẽ ghi lại toàn bộ log như: error, warn, info, ...
+    new transports.File({ filename: 'log/error.log', level: 'error' }),
+    new transports.File({ filename: 'log/combined.log' })
+  ]
+});
+
+// Nếu ứng dụng không phải là môi trường `production`
+// thì chúng ta sẽ ghi log ra console để giúp quá trình debug dễ dàng hơn
+// Định dạng log sẽ là `${info.level}: ${info.message} JSON.stringify({ ...rest })`
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(
+    new transports.Console({
+      format: format.simple()
+    })
+  );
+}
 
 // Routes
 const packageJson = require('./package.json');
@@ -51,10 +78,7 @@ const storage = multer.diskStorage({
     // mkdirp(`${uploadPath}`);
     cb(null, `${path.resolve(__dirname, uploadPath)}`);
   },
-  filename(req, {
-    originalname,
-    mimetype
-  }, cb) {
+  filename(req, { originalname, mimetype }, cb) {
     const nameSegments = originalname.split('.');
     const name = nameSegments[0] || `${Date.now()}`;
 
@@ -63,9 +87,7 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${name}.${ext}`);
   }
 });
-const fileFilter = (req, {
-    mimetype
-  }, cb) =>
+const fileFilter = (req, { mimetype }, cb) =>
   cb(null, Boolean(allowTypes.indexOf(mimetype) > -1));
 const uploader = multer({
   storage,
@@ -73,29 +95,23 @@ const uploader = multer({
   limits: uploadConfig
 });
 
-app.post('/upload', uploader.array('images'), async({
-  files
-}, res) => {
+app.post('/upload', uploader.array('images'), async ({ files }, res) => {
   const dbInstance = await db;
 
   const insertQueue = [];
   const images = [];
-  _.each(files, ({
-    filename,
-    path: imagePath,
-    size
-  }) => {
+  _.each(files, ({ filename, path: imagePath, size }) => {
     // Insert image information to db
     insertQueue.push(
       dbInstance
-      .get('resource')
-      .push({
-        id: uuidv4(),
-        name: filename,
-        path: imagePath,
-        size
-      })
-      .write()
+        .get('resource')
+        .push({
+          id: uuidv4(),
+          name: filename,
+          path: imagePath,
+          size
+        })
+        .write()
     );
     // Prepare data to return to client
     images.push({
@@ -122,16 +138,15 @@ const allowSizes = {
   }
 };
 const DEFAULT_SIZE = 1;
-app.get('/image/:size/:id', async({
-  params
-}, res, next) => {
+app.get('/image/:size/:id', async ({ params }, res, next) => {
   try {
-    const {
-      size,
-      id
-    } = params;
+    const { size, id } = params;
     const imgPath = path.resolve(__dirname, process.env.FOLDER_RESOURCE, id);
-    const imgCachePath = path.resolve(__dirname, 'public/cache', `${size}-${id}`);
+    const imgCachePath = path.resolve(
+      __dirname,
+      'public/cache',
+      `${size}-${id}`
+    );
 
     if (!fs.existsSync(imgPath)) {
       throw new Error(`Image #${id} is not exist.`);
@@ -170,11 +185,10 @@ app.get('/image/:size/:id', async({
     );
     const watermarkData = await watermark.metadata();
     if (imgWidth && imgHeight) {
-      watermark
-        .resize(
-          watermarkData.width * imgWidth / imageData.width,
-          watermarkData.height * imgHeight / imageData.height
-        );
+      watermark.resize(
+        watermarkData.width * imgWidth / imageData.width,
+        watermarkData.height * imgHeight / imageData.height
+      );
     }
 
     imageStream.overlayWith(await watermark.toBuffer(), {
@@ -184,7 +198,9 @@ app.get('/image/:size/:id', async({
     imageStream
       .clone()
       .toFile(imgCachePath)
-      .catch(console.log);
+      .catch(({ message, code, stack }) =>
+        logger.error(message, { code, stack })
+      );
 
     return imageStream.pipe(res);
   } catch (err) {
@@ -194,16 +210,16 @@ app.get('/image/:size/:id', async({
 
 // Error handler
 app.use((err, req, res, next) => {
+  logger.error(err.message, { code: err.code, stack: err.stack });
   const message =
-    process.env.NODE_ENV !== 'production' ?
-    err.message :
-    'An error encountered while processing images';
-  res.status(500).json({
-    message
-  });
+    process.env.NODE_ENV !== 'production'
+      ? err.message
+      : 'An error encountered while processing images';
+  res.status(500).json({ message });
 
   return next();
 });
+
 
 const port = process.env.PORT || 9999;
 app.listen(port);
